@@ -1,6 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { AlertCircle, CheckCircle, Clock, Package, AlertTriangle } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { db } from './firebase';
+import { doc, setDoc, onSnapshot } from 'firebase/firestore';
+
+// The entire customer list is stored in ONE Firestore document: app/data
+const CUSTOMERS_DOC = doc(db, 'app', 'data');
 
 // ============= DATE HELPER (timezone-safe) =============
 // Builds a YYYY-MM-DD string from the LOCAL date instead of UTC.
@@ -108,6 +113,7 @@ function DatePicker({ value, onChange, name }) {
 export default function FitnessBusinessManager() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [customers, setCustomers] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [showOnboardingForm, setShowOnboardingForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [showDailyTasks, setShowDailyTasks] = useState(false);
@@ -120,15 +126,52 @@ export default function FitnessBusinessManager() {
     sevenDayPresentationInviteSent: false, sevenDayInviteDate: '', notes: ''
   });
 
+  // Load from Firestore and stay in sync. On the very first run, copy any
+  // data already saved in this browser (localStorage) up to the cloud once.
   useEffect(() => {
-    const saved = localStorage.getItem('customers');
-    if (saved) {
-      try { setCustomers(JSON.parse(saved)); }
-      catch (error) { console.log('Loading failed'); }
-    }
+    const unsubscribe = onSnapshot(CUSTOMERS_DOC, async (snapshot) => {
+      if (snapshot.exists()) {
+        setCustomers(snapshot.data().customers || []);
+        setLoading(false);
+      } else {
+        // No cloud data yet — migrate this browser's existing records (one time)
+        let local = [];
+        try {
+          const saved = localStorage.getItem('customers');
+          if (saved) local = JSON.parse(saved);
+        } catch (e) { local = []; }
+
+        if (local.length > 0) {
+          try {
+            await setDoc(CUSTOMERS_DOC, { customers: local });
+            // onSnapshot will fire again with the migrated data
+          } catch (e) {
+            console.error('Migration failed', e);
+            setCustomers(local);
+            setLoading(false);
+          }
+        } else {
+          setCustomers([]);
+          setLoading(false);
+        }
+      }
+    }, (error) => {
+      console.error('Firestore connection error', error);
+      setLoading(false);
+      alert('⚠️ Could not connect to the cloud database. Please check your internet connection and refresh.');
+    });
+
+    return () => unsubscribe();
   }, []);
 
-  const saveCustomers = (data) => localStorage.setItem('customers', JSON.stringify(data));
+  const saveCustomers = async (data) => {
+    try {
+      await setDoc(CUSTOMERS_DOC, { customers: data });
+    } catch (e) {
+      console.error('Save failed', e);
+      alert('⚠️ Could not save to the cloud. Check your internet connection and try again.');
+    }
+  };
 
   const calculateAge = (dob) => {
     if (!dob) return '';
@@ -364,6 +407,15 @@ export default function FitnessBusinessManager() {
 
   const goldCustomers = customers.filter(c => isGoldCustomer(c.productQuantity)).length;
   const nonGoldCustomers = customers.filter(c => !isGoldCustomer(c.productQuantity)).length;
+
+  if (loading) {
+    return (
+      <div style={{ ...styles.container, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '15px' }}>
+        <div style={{ fontSize: '40px' }}>💪</div>
+        <p style={{ color: '#667eea', fontSize: '16px', fontWeight: 'bold' }}>Loading your customers from the cloud...</p>
+      </div>
+    );
+  }
 
   return (
     <div style={styles.container}>
