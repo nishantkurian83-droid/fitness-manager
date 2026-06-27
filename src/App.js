@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AlertCircle, CheckCircle, Clock, Package, AlertTriangle } from 'lucide-react';
+import { AlertCircle, CheckCircle, Clock, Package, AlertTriangle, Star, Gift } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { db } from './firebase';
 import { doc, setDoc, onSnapshot } from 'firebase/firestore';
@@ -123,7 +123,10 @@ export default function FitnessBusinessManager() {
     dateOfJoining: '', productQuantity: '1', lastPurchaseDate: '',
     welcomeCallDone: false, welcomeCallDate: '', dailyAlertResponded: null,
     dailyAlertResponseDate: '', lastResponseDate: '',
-    sevenDayPresentationInviteSent: false, sevenDayInviteDate: '', notes: ''
+    sevenDayPresentationInviteSent: false, sevenDayInviteDate: '',
+    sevenDayWelcomeAlertDone: false, sevenDayWelcomeAlertDate: '',
+    businessOpportunityAlertsHistory: [],
+    notes: ''
   });
 
   // Load from Firestore and stay in sync. On the very first run, copy any
@@ -224,6 +227,27 @@ export default function FitnessBusinessManager() {
     return Math.ceil((reorderDate - today) / (1000 * 60 * 60 * 24));
   };
 
+  // NEW: Business opportunity alert is due from the 15th of the month, for
+  // customers who joined 30+ days ago, once per calendar month.
+  const isBusinessOpportunityDue = (customer) => {
+    const today = new Date();
+    const daysSinceJoining = calculateDaysSinceJoining(customer.dateOfJoining);
+    if (daysSinceJoining < 30) return false;
+    if (today.getDate() < 15) return false;
+    const currentMonth = toLocalDateString(today).slice(0, 7);
+    const alreadyDone = (customer.businessOpportunityAlertsHistory || []).some(
+      a => a.month === currentMonth && a.completed
+    );
+    return !alreadyDone;
+  };
+
+  const getCurrentMonthLabel = () => {
+    const today = new Date();
+    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'];
+    return `${monthNames[today.getMonth()]} ${today.getFullYear()}`;
+  };
+
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
     setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
@@ -239,7 +263,7 @@ export default function FitnessBusinessManager() {
     if (editingId) {
       updatedCustomers = customers.map(c => c.id === editingId ? { ...formData, id: editingId } : c);
     } else {
-      updatedCustomers = [...customers, { ...formData, lastPurchaseDate: formData.dateOfJoining, id: Date.now().toString() }];
+      updatedCustomers = [...customers, { ...formData, lastPurchaseDate: formData.dateOfJoining, businessOpportunityAlertsHistory: [], id: Date.now().toString() }];
     }
 
     setCustomers(updatedCustomers);
@@ -270,7 +294,10 @@ export default function FitnessBusinessManager() {
       dateOfJoining: '', productQuantity: '1', lastPurchaseDate: '',
       welcomeCallDone: false, welcomeCallDate: '', dailyAlertResponded: null,
       dailyAlertResponseDate: '', lastResponseDate: '',
-      sevenDayPresentationInviteSent: false, sevenDayInviteDate: '', notes: ''
+      sevenDayPresentationInviteSent: false, sevenDayInviteDate: '',
+      sevenDayWelcomeAlertDone: false, sevenDayWelcomeAlertDate: '',
+      businessOpportunityAlertsHistory: [],
+      notes: ''
     });
     setEditingId(null);
   };
@@ -315,6 +342,43 @@ export default function FitnessBusinessManager() {
     }
   };
 
+  // NEW: Handle 7-day welcome milestone alert
+  const handle7DayWelcomeAlert = (id) => {
+    const today = toLocalDateString(new Date());
+    const updated = customers.map(c => c.id === id ? {
+      ...c,
+      sevenDayWelcomeAlertDone: true,
+      sevenDayWelcomeAlertDate: today
+    } : c);
+    setCustomers(updated);
+    saveCustomers(updated);
+    alert('✅ 7-Day welcome alert marked complete!');
+  };
+
+  // NEW: Handle business opportunity alert (tracked per calendar month)
+  const handleBusinessOpportunityAlert = (id) => {
+    const currentMonth = toLocalDateString(new Date()).slice(0, 7);
+    const todayDate = toLocalDateString(new Date());
+    const updated = customers.map(c => {
+      if (c.id === id) {
+        const history = c.businessOpportunityAlertsHistory || [];
+        const existingIndex = history.findIndex(a => a.month === currentMonth);
+        let newHistory;
+        if (existingIndex >= 0) {
+          newHistory = [...history];
+          newHistory[existingIndex] = { month: currentMonth, completed: true, date: todayDate };
+        } else {
+          newHistory = [...history, { month: currentMonth, completed: true, date: todayDate }];
+        }
+        return { ...c, businessOpportunityAlertsHistory: newHistory };
+      }
+      return c;
+    });
+    setCustomers(updated);
+    saveCustomers(updated);
+    alert(`✅ Business opportunity alert for ${getCurrentMonthLabel()} marked complete!`);
+  };
+
   const exportToExcel = () => {
     if (customers.length === 0) {
       alert('❌ No customers to export!');
@@ -323,6 +387,7 @@ export default function FitnessBusinessManager() {
 
     const excelData = customers.map(customer => {
       const isGold = isGoldCustomer(customer.productQuantity);
+      const totalOppAlerts = (customer.businessOpportunityAlertsHistory || []).filter(a => a.completed).length;
       return {
         'Name': customer.name,
         'Date of Birth': customer.dateOfBirth,
@@ -339,9 +404,11 @@ export default function FitnessBusinessManager() {
         'Next Reorder Due Date': getReorderDueDate(customer.lastPurchaseDate, customer.productQuantity) || 'N/A',
         'Days Until Reorder': customer.lastPurchaseDate ? getDaysUntilReorder(customer.lastPurchaseDate, customer.productQuantity) : 'N/A',
         'Welcome Call Status': customer.welcomeCallDone ? `Done (${customer.welcomeCallDate})` : 'Pending',
+        '7-Day Welcome Alert': customer.sevenDayWelcomeAlertDone ? `Done (${customer.sevenDayWelcomeAlertDate})` : 'Pending',
         'Last Response Date': customer.lastResponseDate || 'Never',
         'Days Since Last Response': customer.lastResponseDate ? calculateDaysSinceLastResponse(customer.lastResponseDate) : 'N/A',
         '7-Day Presentation Sent': customer.sevenDayPresentationInviteSent ? `Yes (${customer.sevenDayInviteDate})` : 'No',
+        'Business Opp Alerts Completed': totalOppAlerts,
         'Notes': customer.notes || ''
       };
     });
@@ -361,7 +428,8 @@ export default function FitnessBusinessManager() {
   const getAlerts = () => {
     const alerts = {
       welcomeCallPending: [], dailyAlertCheck: [], sevenDayPresentationDue: [],
-      reorderDueGold: [], reorderDueNonGold: [], noResponse3Days: []
+      reorderDueGold: [], reorderDueNonGold: [], noResponse3Days: [],
+      sevenDayWelcomeDue: [], businessOpportunityDue: []
     };
 
     customers.forEach(customer => {
@@ -375,6 +443,16 @@ export default function FitnessBusinessManager() {
       const daysSince = calculateDaysSinceJoining(customer.dateOfJoining);
       if (daysSince >= 7 && !customer.sevenDayPresentationInviteSent) {
         alerts.sevenDayPresentationDue.push(customer);
+      }
+
+      // NEW: 7-day welcome milestone alert
+      if (daysSince >= 7 && !customer.sevenDayWelcomeAlertDone) {
+        alerts.sevenDayWelcomeDue.push(customer);
+      }
+
+      // NEW: Monthly business opportunity alert
+      if (isBusinessOpportunityDue(customer)) {
+        alerts.businessOpportunityDue.push(customer);
       }
 
       // Different reorder logic for Gold (20 days) and Non-Gold (30 days)
@@ -403,7 +481,8 @@ export default function FitnessBusinessManager() {
   const totalReorders = alerts.reorderDueGold.length + alerts.reorderDueNonGold.length;
   const totalPendingTasks = alerts.welcomeCallPending.length + alerts.dailyAlertCheck.length +
                              alerts.sevenDayPresentationDue.length + totalReorders +
-                             alerts.noResponse3Days.length;
+                             alerts.noResponse3Days.length + alerts.sevenDayWelcomeDue.length +
+                             alerts.businessOpportunityDue.length;
 
   const goldCustomers = customers.filter(c => isGoldCustomer(c.productQuantity)).length;
   const nonGoldCustomers = customers.filter(c => !isGoldCustomer(c.productQuantity)).length;
@@ -447,6 +526,24 @@ export default function FitnessBusinessManager() {
                     <input type="checkbox" onChange={() => handleDailyAlertResponse(c.id, true)} style={styles.checkbox} />
                     <span style={styles.taskBadgeDarkRed}>URGENT</span>
                     No response: <strong>{c.name}</strong> ({c.daysSinceResponse} days)
+                  </label>
+                </div>
+              ))}
+              {alerts.businessOpportunityDue.map(c => (
+                <div key={`bo-${c.id}`} style={styles.taskItem}>
+                  <label style={styles.taskLabel}>
+                    <input type="checkbox" onChange={() => handleBusinessOpportunityAlert(c.id)} style={styles.checkbox} />
+                    <span style={styles.taskBadgeBrightGold}>OPPORTUNITY</span>
+                    Business opportunity ({getCurrentMonthLabel()}): <strong>{c.name}</strong>
+                  </label>
+                </div>
+              ))}
+              {alerts.sevenDayWelcomeDue.map(c => (
+                <div key={`sw-${c.id}`} style={styles.taskItem}>
+                  <label style={styles.taskLabel}>
+                    <input type="checkbox" onChange={() => handle7DayWelcomeAlert(c.id)} style={styles.checkbox} />
+                    <span style={styles.taskBadgeLavender}>7-DAY WELCOME</span>
+                    7-Day milestone: <strong>{c.name}</strong>
                   </label>
                 </div>
               ))}
@@ -536,8 +633,16 @@ export default function FitnessBusinessManager() {
                 <div style={styles.statLabel}>Daily Responses</div>
               </div>
               <div style={styles.statCard}>
+                <div style={{...styles.statNumber, color: '#b39ddb'}}>{alerts.sevenDayWelcomeDue.length}</div>
+                <div style={styles.statLabel}>🎉 7-Day Welcome</div>
+              </div>
+              <div style={styles.statCard}>
                 <div style={{...styles.statNumber, color: '#4ecdc4'}}>{alerts.sevenDayPresentationDue.length}</div>
                 <div style={styles.statLabel}>Presentations Due</div>
+              </div>
+              <div style={styles.statCard}>
+                <div style={{...styles.statNumber, color: '#ffc107'}}>{alerts.businessOpportunityDue.length}</div>
+                <div style={styles.statLabel}>🌟 Business Opportunity</div>
               </div>
               <div style={styles.statCard}>
                 <div style={{...styles.statNumber, color: '#f1c40f'}}>{alerts.reorderDueGold.length}</div>
@@ -726,6 +831,46 @@ export default function FitnessBusinessManager() {
               </div>
             )}
 
+            {alerts.businessOpportunityDue.length > 0 && (
+              <div style={styles.alertSection}>
+                <h3 style={{color: '#ffc107', display: 'flex', alignItems: 'center', gap: '10px'}}>
+                  <Star size={24} /> 🌟 Business Opportunity - {getCurrentMonthLabel()} ({alerts.businessOpportunityDue.length})
+                </h3>
+                <p style={{ color: '#666', fontSize: '13px' }}>Inform these customers about the business opportunity this month</p>
+                <div style={styles.alertGrid}>
+                  {alerts.businessOpportunityDue.map(c => (
+                    <div key={c.id} style={{...styles.alertCard, borderLeft: '5px solid #ffc107'}}>
+                      <h4>{c.name}</h4>
+                      <p><strong>Joined:</strong> {c.dateOfJoining}</p>
+                      <p><strong>Customer for:</strong> {calculateDaysSinceJoining(c.dateOfJoining)} days</p>
+                      <p style={{color: '#d39e00', fontWeight: 'bold'}}>🌟 Time to share business opportunity!</p>
+                      <button onClick={() => handleBusinessOpportunityAlert(c.id)} style={{...styles.btnSuccess, width: '100%'}}>✅ Mark Done for {getCurrentMonthLabel()}</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {alerts.sevenDayWelcomeDue.length > 0 && (
+              <div style={styles.alertSection}>
+                <h3 style={{color: '#9c88c4', display: 'flex', alignItems: 'center', gap: '10px'}}>
+                  <Gift size={24} /> 🎉 7-Day Welcome Milestone ({alerts.sevenDayWelcomeDue.length})
+                </h3>
+                <p style={{ color: '#666', fontSize: '13px' }}>Customers who have completed 7 days - send them a welcome milestone message</p>
+                <div style={styles.alertGrid}>
+                  {alerts.sevenDayWelcomeDue.map(c => (
+                    <div key={c.id} style={{...styles.alertCard, borderLeft: '5px solid #b39ddb'}}>
+                      <h4>{c.name}</h4>
+                      <p><strong>Joined:</strong> {c.dateOfJoining}</p>
+                      <p><strong>Days completed:</strong> {calculateDaysSinceJoining(c.dateOfJoining)} days</p>
+                      <p style={{color: '#9c88c4', fontWeight: 'bold'}}>🎉 7-day milestone reached!</p>
+                      <button onClick={() => handle7DayWelcomeAlert(c.id)} style={{...styles.btnSuccess, width: '100%'}}>✅ Mark Complete</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {alerts.reorderDueGold.length > 0 && (
               <div style={styles.alertSection}>
                 <h3 style={{color: '#f1c40f', display: 'flex', alignItems: 'center', gap: '10px'}}>
@@ -827,7 +972,7 @@ export default function FitnessBusinessManager() {
       </div>
 
       <div style={styles.footer}>
-        <p>💾 All data saved locally. Gold: 20-day reorder cycle | Non-Gold: 30-day reorder cycle</p>
+        <p>☁️ Data synced to the cloud. Gold: 20-day reorder cycle | Non-Gold: 30-day reorder cycle</p>
       </div>
     </div>
   );
@@ -850,6 +995,8 @@ const styles = {
   taskBadgePurple: { backgroundColor: '#9b59b6', color: 'white', padding: '3px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold' },
   taskBadgeGold: { backgroundColor: '#f1c40f', color: 'white', padding: '3px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold' },
   taskBadgeDarkRed: { backgroundColor: '#c0392b', color: 'white', padding: '3px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold' },
+  taskBadgeLavender: { backgroundColor: '#b39ddb', color: 'white', padding: '3px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold' },
+  taskBadgeBrightGold: { backgroundColor: '#ffc107', color: 'white', padding: '3px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold' },
   nav: { display: 'flex', gap: '10px', padding: '15px 40px', backgroundColor: 'white', borderBottom: '1px solid #ddd', flexWrap: 'wrap' },
   navBtn: { padding: '10px 20px', border: 'none', borderRadius: '8px', backgroundColor: '#f0f2f5', color: '#333', cursor: 'pointer', fontSize: '14px', fontWeight: 'bold' },
   navBtnActive: { background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white' },
