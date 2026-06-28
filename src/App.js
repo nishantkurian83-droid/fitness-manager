@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AlertCircle, CheckCircle, Clock, Package, AlertTriangle, Star, Gift } from 'lucide-react';
+import { AlertCircle, Clock, Package, AlertTriangle, Star, Gift } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { db } from './firebase';
 import { doc, setDoc, onSnapshot } from 'firebase/firestore';
@@ -123,7 +123,6 @@ export default function FitnessBusinessManager() {
     dateOfJoining: '', productQuantity: '1', lastPurchaseDate: '',
     welcomeCallDone: false, welcomeCallDate: '', dailyAlertResponded: null,
     dailyAlertResponseDate: '', lastResponseDate: '',
-    sevenDayPresentationInviteSent: false, sevenDayInviteDate: '',
     sevenDayWelcomeAlertDone: false, sevenDayWelcomeAlertDate: '',
     businessOpportunityAlertsHistory: [],
     notes: ''
@@ -294,7 +293,6 @@ export default function FitnessBusinessManager() {
       dateOfJoining: '', productQuantity: '1', lastPurchaseDate: '',
       welcomeCallDone: false, welcomeCallDate: '', dailyAlertResponded: null,
       dailyAlertResponseDate: '', lastResponseDate: '',
-      sevenDayPresentationInviteSent: false, sevenDayInviteDate: '',
       sevenDayWelcomeAlertDone: false, sevenDayWelcomeAlertDate: '',
       businessOpportunityAlertsHistory: [],
       notes: ''
@@ -322,13 +320,6 @@ export default function FitnessBusinessManager() {
     alert(responded ? '✅ Response recorded!' : '✅ No response recorded!');
   };
 
-  const handleSend7DayInvite = (id) => {
-    const updated = customers.map(c => c.id === id ? { ...c, sevenDayPresentationInviteSent: true, sevenDayInviteDate: toLocalDateString(new Date()) } : c);
-    setCustomers(updated);
-    saveCustomers(updated);
-    alert('✅ Invite sent!');
-  };
-
   const handleUpdatePurchaseDate = (id) => {
     const today = toLocalDateString(new Date());
     const customer = customers.find(c => c.id === id);
@@ -352,7 +343,7 @@ export default function FitnessBusinessManager() {
     } : c);
     setCustomers(updated);
     saveCustomers(updated);
-    alert('✅ 7-Day welcome alert marked complete!');
+    alert('✅ 7-Day reminder marked complete!');
   };
 
   // NEW: Handle business opportunity alert (tracked per calendar month)
@@ -404,10 +395,9 @@ export default function FitnessBusinessManager() {
         'Next Reorder Due Date': getReorderDueDate(customer.lastPurchaseDate, customer.productQuantity) || 'N/A',
         'Days Until Reorder': customer.lastPurchaseDate ? getDaysUntilReorder(customer.lastPurchaseDate, customer.productQuantity) : 'N/A',
         'Welcome Call Status': customer.welcomeCallDone ? `Done (${customer.welcomeCallDate})` : 'Pending',
-        '7-Day Welcome Alert': customer.sevenDayWelcomeAlertDone ? `Done (${customer.sevenDayWelcomeAlertDate})` : 'Pending',
+        '7-Day Reminder': customer.sevenDayWelcomeAlertDone ? `Done (${customer.sevenDayWelcomeAlertDate})` : 'Pending',
         'Last Response Date': customer.lastResponseDate || 'Never',
         'Days Since Last Response': customer.lastResponseDate ? calculateDaysSinceLastResponse(customer.lastResponseDate) : 'N/A',
-        '7-Day Presentation Sent': customer.sevenDayPresentationInviteSent ? `Yes (${customer.sevenDayInviteDate})` : 'No',
         'Business Opp Alerts Completed': totalOppAlerts,
         'Notes': customer.notes || ''
       };
@@ -427,7 +417,7 @@ export default function FitnessBusinessManager() {
 
   const getAlerts = () => {
     const alerts = {
-      welcomeCallPending: [], dailyAlertCheck: [], sevenDayPresentationDue: [],
+      welcomeCallPending: [], dailyAlertCheck: [],
       reorderDueGold: [], reorderDueNonGold: [], noResponse3Days: [],
       sevenDayWelcomeDue: [], businessOpportunityDue: []
     };
@@ -441,11 +431,8 @@ export default function FitnessBusinessManager() {
       }
 
       const daysSince = calculateDaysSinceJoining(customer.dateOfJoining);
-      if (daysSince >= 7 && !customer.sevenDayPresentationInviteSent) {
-        alerts.sevenDayPresentationDue.push(customer);
-      }
 
-      // NEW: 7-day welcome milestone alert
+      // 7-day reminder alert
       if (daysSince >= 7 && !customer.sevenDayWelcomeAlertDone) {
         alerts.sevenDayWelcomeDue.push(customer);
       }
@@ -480,7 +467,7 @@ export default function FitnessBusinessManager() {
   const alerts = getAlerts();
   const totalReorders = alerts.reorderDueGold.length + alerts.reorderDueNonGold.length;
   const totalPendingTasks = alerts.welcomeCallPending.length + alerts.dailyAlertCheck.length +
-                             alerts.sevenDayPresentationDue.length + totalReorders +
+                             totalReorders +
                              alerts.noResponse3Days.length + alerts.sevenDayWelcomeDue.length +
                              alerts.businessOpportunityDue.length;
 
@@ -542,8 +529,8 @@ export default function FitnessBusinessManager() {
                 <div key={`sw-${c.id}`} style={styles.taskItem}>
                   <label style={styles.taskLabel}>
                     <input type="checkbox" onChange={() => handle7DayWelcomeAlert(c.id)} style={styles.checkbox} />
-                    <span style={styles.taskBadgeLavender}>7-DAY WELCOME</span>
-                    7-Day milestone: <strong>{c.name}</strong>
+                    <span style={styles.taskBadgeLavender}>7-DAY REMINDER</span>
+                    7-Day reminder: <strong>{c.name}</strong>
                   </label>
                 </div>
               ))}
@@ -562,15 +549,6 @@ export default function FitnessBusinessManager() {
                     <input type="checkbox" onChange={() => handleDailyAlertResponse(c.id, true)} style={styles.checkbox} />
                     <span style={styles.taskBadgeOrange}>DAILY</span>
                     Check response: <strong>{c.name}</strong>
-                  </label>
-                </div>
-              ))}
-              {alerts.sevenDayPresentationDue.map(c => (
-                <div key={`pr-${c.id}`} style={styles.taskItem}>
-                  <label style={styles.taskLabel}>
-                    <input type="checkbox" onChange={() => handleSend7DayInvite(c.id)} style={styles.checkbox} />
-                    <span style={styles.taskBadgeTeal}>PRESENT</span>
-                    Presentation invite: <strong>{c.name}</strong>
                   </label>
                 </div>
               ))}
@@ -634,11 +612,7 @@ export default function FitnessBusinessManager() {
               </div>
               <div style={styles.statCard}>
                 <div style={{...styles.statNumber, color: '#b39ddb'}}>{alerts.sevenDayWelcomeDue.length}</div>
-                <div style={styles.statLabel}>🎉 7-Day Welcome</div>
-              </div>
-              <div style={styles.statCard}>
-                <div style={{...styles.statNumber, color: '#4ecdc4'}}>{alerts.sevenDayPresentationDue.length}</div>
-                <div style={styles.statLabel}>Presentations Due</div>
+                <div style={styles.statLabel}>🎉 7-Day Reminder</div>
               </div>
               <div style={styles.statCard}>
                 <div style={{...styles.statNumber, color: '#ffc107'}}>{alerts.businessOpportunityDue.length}</div>
@@ -854,16 +828,16 @@ export default function FitnessBusinessManager() {
             {alerts.sevenDayWelcomeDue.length > 0 && (
               <div style={styles.alertSection}>
                 <h3 style={{color: '#9c88c4', display: 'flex', alignItems: 'center', gap: '10px'}}>
-                  <Gift size={24} /> 🎉 7-Day Welcome Milestone ({alerts.sevenDayWelcomeDue.length})
+                  <Gift size={24} /> 🎉 7-Day Reminder ({alerts.sevenDayWelcomeDue.length})
                 </h3>
-                <p style={{ color: '#666', fontSize: '13px' }}>Customers who have completed 7 days - send them a welcome milestone message</p>
+                <p style={{ color: '#666', fontSize: '13px' }}>Customers who have completed 7 days - send them their 7-day reminder</p>
                 <div style={styles.alertGrid}>
                   {alerts.sevenDayWelcomeDue.map(c => (
                     <div key={c.id} style={{...styles.alertCard, borderLeft: '5px solid #b39ddb'}}>
                       <h4>{c.name}</h4>
                       <p><strong>Joined:</strong> {c.dateOfJoining}</p>
                       <p><strong>Days completed:</strong> {calculateDaysSinceJoining(c.dateOfJoining)} days</p>
-                      <p style={{color: '#9c88c4', fontWeight: 'bold'}}>🎉 7-day milestone reached!</p>
+                      <p style={{color: '#9c88c4', fontWeight: 'bold'}}>🎉 7-day reminder due!</p>
                       <button onClick={() => handle7DayWelcomeAlert(c.id)} style={{...styles.btnSuccess, width: '100%'}}>✅ Mark Complete</button>
                     </div>
                   ))}
@@ -939,23 +913,6 @@ export default function FitnessBusinessManager() {
                         <button onClick={() => handleDailyAlertResponse(c.id, true)} style={{...styles.btnSuccess, flex: 1}}>✅ Yes</button>
                         <button onClick={() => handleDailyAlertResponse(c.id, false)} style={{...styles.btnCancel, flex: 1}}>❌ No</button>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {alerts.sevenDayPresentationDue.length > 0 && (
-              <div style={styles.alertSection}>
-                <h3 style={{color: '#4ecdc4', display: 'flex', alignItems: 'center', gap: '10px'}}>
-                  <CheckCircle size={24} /> Presentation Invites ({alerts.sevenDayPresentationDue.length})
-                </h3>
-                <div style={styles.alertGrid}>
-                  {alerts.sevenDayPresentationDue.map(c => (
-                    <div key={c.id} style={styles.alertCard}>
-                      <h4>{c.name}</h4>
-                      <p><strong>Joined:</strong> {c.dateOfJoining}</p>
-                      <button onClick={() => handleSend7DayInvite(c.id)} style={{...styles.btnSuccess, width: '100%'}}>🎤 Send Invite</button>
                     </div>
                   ))}
                 </div>
